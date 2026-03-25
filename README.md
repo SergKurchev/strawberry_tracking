@@ -70,5 +70,3 @@ R, t, ids, boxes, matches1, matches2, inliers1, inliers2, debug = tracker.forwar
 2. **Inlier Color Coding**: In the debug visualizations, **Cyan** represents raw matches, while **Red** represents verified inliers.
 3. **Static Detection**: If the title shows `STATIC`, the displacement was below `min_motion_thresh`. The system skips the solver to avoid degenerate matrix calculations and assumes Identity motion.
 
----
-Designed for precision agriculture and robotic perception.

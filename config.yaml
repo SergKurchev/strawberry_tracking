@@ -8,6 +8,12 @@ data_dir: 'Robo Strawberry.coco-segmentation/train'
 # Directory to save processing results (videos, frames, logs)
 output_dir: 'test_results'
 
+# === Export Settings ===
+# Save results (poses, tracking, inliers) in convenient formats
+export_data: true
+# Folder where JSON and CSV files will be saved
+export_dir: 'exported_data'
+
 # === YOLO Detection ===
 # Confidence threshold: objects with probability below this will be ignored
 yolo_conf: 0.2
@@ -16,11 +22,11 @@ iou_threshold: 0.45
 
 # === Feature Matching (DISK + LightGlue) ===
 # Maximum number of local features (points) extracted from a single frame via DISK
-num_features: 4096
+num_features: 1024
 # If true, features are extracted from the whole frame (for SLAM/pose). If false - only inside strawberry boxes.
 use_global_features: true
 # Minimum number of matches between frames to confirm object association (ID)
-match_threshold: 3
+match_threshold: 5
 
 # === RANSAC / Camera Pose Recovery ===
 # RANSAC success probability: affects the number of iterations (higher is more reliable but slower)
@@ -38,7 +44,7 @@ gallery_ttl: 10
 
 # === Test Settings ===
 # Range of frames from the dataset to process in the test script
-test_frame_range: [60, 70]
+test_frame_range: [0, 299]
 
 # === Camera Intrinsic Matrix (K) ===
 camera:
@@ -47,7 +53,8 @@ camera:
   # Frame height in pixels
   height: 1080
   # Focal length in pixels
-  focal_length: 1000.0
+  focal_length_x: 1649.25
+  focal_length_y: 1649.27
   # Optical center X coordinate (principal point x)
   center_x: 960.0
   # Optical center Y coordinate (principal point y)

@@ -71,5 +71,43 @@ R, t, ids, boxes, matches1, matches2, inliers1, inliers2, debug = tracker.forwar
 2. **Освещение**: Глобальные признаки (DISK) устойчивы к изменениям света, но при сильных бликах на листьях количество инлайеров может снижаться.
 3. **Статичные кадры**: Если `inliers` на графике подкрашены красным, а в заголовке написано `STATIC`, значит движение слишком мало для вычисления честной позы, и алгоритм сохранил предыдущую ориентацию.
 
----
-Разработано для задач точного земледелия и робототехники.
+
+## Экспорт данных (Export Data)
+
+В `config.yaml` доступен режим `export_data: true`. При его активации `test_on_coco.py` автоматически сохраняет всю информацию о сцене в папку `exported_data/`:
+1. `poses.csv`: Матрицы поворота ($R$) и векторы смещения ($t$) для вычисления одометрии.
+2. `tracking.json`: Идентификаторы (ID) ягод и их bounding boxes на каждом кадре (идеально для метрик MOTA/IDF1).
+3. `inliers.json`: Точные 2D-координаты совпавших ключевых точек, по которым была рассчитана матрица $R$.
+
+### Пример загрузки и анализа данных (Python)
+
+```python
+import json
+import pandas as pd
+import numpy as np
+
+# 1. Загрузка траектории камеры (Одометрия)
+poses_df = pd.read_csv('exported_data/poses.csv')
+print("Первые 5 кадров одометрии:")
+print(poses_df.head())
+
+# Конвертация строки CSV обратно в матрицу вращения R (3x3)
+row = poses_df.iloc[0]
+R = np.array([
+    [row['r11'], row['r12'], row['r13']],
+    [row['r21'], row['r22'], row['r23']],
+    [row['r31'], row['r32'], row['r33']]
+])
+
+# 2. Загрузка трекинга ягод
+with open('exported_data/tracking.json', 'r') as f:
+    tracking = json.load(f)
+
+# Простая операция: Найти на скольких кадрах появлялась ягода с ID 0
+berry_0_frames = []
+for frame_name, detections in tracking.items():
+    for det in detections:
+        if det['id'] == 0:
+            berry_0_frames.append(frame_name)
+            
+print(f"\\nЯгода ID 0 была успешно отслежена на {len(berry_0_frames)} кадрах.")
