@@ -1,0 +1,13 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.python-version
+My_projects.pdf
+Robo Strawberry.coco-segmentation.zip
+
+# Virtual environments
+.venv
