@@ -1,142 +1,112 @@
 # Strawberry Tracker & Pose Estimator
 
-A system for strawberry tracking and camera pose estimation based on deep learning (YOLOv8) and feature extraction (DISK/LightGlue). Designed for processing synthetic data from Isaac Sim and preparing measurements for the GTSAM factor graph.
+A visual odometry and long-term tracking system optimized for synthetic Isaac Sim data. The system generates measurements for the GTSAM factor graph.
 
-## Core Features and Architecture (Dual-Pipeline)
+## Mathematical Architecture (Dual-Pipeline)
 
-The project uses a hybrid approach to resolve the conflict between high-quality tracking of small objects and reliable visual odometry:
+The project implements a hybrid feature extraction method to simultaneously solve object Re-ID and SLAM tasks:
 
-1. **Phase 1: Focused Tracking (Local Features)**
-   - YOLOv8 neural network detects berries.
-   - The frame background is masked (filled with black), forcing the DISK extractor to generate keypoints *exclusively* on the strawberry texture.
-   - **Result:** Ideal performance of the Hungarian algorithm (Re-ID) without background objects "stealing" features.
-2. **Phase 2: Global Localization (Global Features)**
-   - Simultaneously, DISK scans the entire frame (berries, leaves, table, walls).
-   - **Result:** Rich scene geometry eliminates the "Planar Degeneracy" problem, allowing the MAGSAC algorithm to accurately calculate 3D rotation and camera translation.
-3. **Phase 3: Long-term Memory (Re-ID Gallery)**
-   - If a berry is occluded by a leaf and disappears, its features are stored in the `gallery` for a specified number of frames.
-   - Upon reappearance, the tracker matches it with the gallery and restores the original ID.
-4. **Resilience to Pauses (Small Motion Fallback)**
-   - If the average point displacement between frames is less than `min_motion_thresh` (e.g., 1.0 pixel), the system detects a camera stop and returns an identity rotation matrix, protecting the algorithm from mathematical instability.
+### 1. Detection and Segmentation
+YOLOv8 is used to generate a set of bounding boxes $B = \{b_1, ..., b_n\}$. To eliminate duplicates, NMS is applied with a threshold $\tau_{iou}$. A local mask is associated with each box for berry texture segmentation.
 
----
+### 2. Feature Extraction (DISK)
+Separate keypoint extraction is applied for two different tasks:
+* **Feature-Track (Local):** Extraction of points $p_{local}$ inside the masks $B$. Mathematically, this is filtering the input image $I$ through a binary object mask $M$: $I_{masked} = I \odot M$. This ensures that descriptors belong only to berries.
+* **SLAM-Track (Global):** Extraction of points $p_{global}$ from the entire frame $I$ to capture scene geometry (walls, floor, leaves), which is critical for odometry stability when there are few berries in the frame.
 
-## Mathematics and Camera Parameters
+### 3. Matching and Re-ID (Hungarian Algorithm)
+To associate berries between frames $t-1$ and $t$, a weight matrix $W$ is constructed, where $w_{ij}$ is the number of LightGlue matches between boxes $i$ and $j$. The linear assignment problem is solved:
+$$\max \sum_{i,j} w_{ij} x_{ij}, \quad \text{s.t.} \sum_i x_{ij} = 1, \sum_j x_{ij} = 1$$
+The result is the preservation of a stable `global_id` for each object.
 
-For accurate localization, the algorithm uses the laws of epipolar geometry.
-
-### 1. Camera Intrinsic Matrix ($K$)
-Physical camera parameters from Isaac Sim (millimeters) are converted to pixel values for OpenCV:
-
-$$f_{px} = f_{mm} \cdot \frac{W_{px}}{A_{horiz}}$$
-
-For a resolution of $1920 \times 1080$, a focal length of $18.0$ mm, and a horizontal aperture of $20.955$ mm, the intrinsic matrix $K$ looks like this:
-
-$$K = \begin{bmatrix} 1649.25 & 0 & 960.0 \\ 0 & 1649.27 & 540.0 \\ 0 & 0 & 1 \end{bmatrix}$$
-
-### 2. Odometry Calculation (Essential Matrix)
-Based on global keypoint matches, an Essential Matrix $E$ is calculated, satisfying the condition:
-$$x_2^T E x_1 = 0$$
-where $x_1, x_2$ are normalized coordinates of matched points on adjacent frames. 
-To remove noise, a robust optimization algorithm is applied (default is `MAGSAC`). The matrix $E$ is then decomposed into the final:
-- **$R$**: Rotation matrix ($3 \times 3$).
-- **$t$**: Translation vector ($3 \times 1$, normalized).
+### 4. Pose Recovery (Essential Matrix & MAGSAC)
+Based on global inliers $x_1, x_2$, the Essential Matrix $E$ is calculated by minimizing the reprojection error:
+$$x_2^T E x_1 = 0, \quad E = [t]_{\times} R$$
+The **MAGSAC** algorithm is used to filter outliers. If the average point displacement $\Delta p < \tau_{motion}$, the motion is recognized as zero ($R=I, t=0$) to protect against drift in static scenes.
 
 ---
 
-## Installation and Launch
+## API Usage Instructions
 
-The project uses the modern `uv` package manager.
+### Main Loop in Code
+The `forward` method encapsulates all frame processing logic.
 
+```python
+from strawberry_tracker import StrawberryTracker
+from ultralytics import YOLO
+
+# 1. Initialization
+tracker = StrawberryTracker(YOLO('best.pt'), device='cuda', config=config)
+
+# 2. K Matrix (Intrinsics from Isaac Sim)
+K = np.array([[1649.25, 0, 960], [0, 1649.25, 540], [0, 0, 1]])
+
+# 3. Processing (in a loop)
+# img_rgb: [H, W, 3] array
+R, t, ids, boxes, m1, m2, i1, i2, debug = tracker.forward(img_rgb, K)
+```
+
+**Return Values:**
+* `R`, `t`: Relative camera transformation (Rotation 3x3, Translation 3x1).
+* `ids`: List of global IDs for berries in the current frame.
+* `boxes`: Box coordinates `[x1, y1, x2, y2]`.
+* `i1, i2`: Inlier point coordinates (geometrically correct matches).
+
+---
+
+## Running Tests and Data Export
+
+To run mass processing of the COCO dataset and generate files for GTSAM, use the `test_on_coco.py` script.
+
+### 1. Preparation
+Ensure that `config.yaml` is configured with:
+- `test_frame_range: [start, end]` — the range of frames.
+- `export_data: true` — the results saving flag.
+
+### 2. Launch
 ```bash
-uv sync
 uv run python test_on_coco.py
 ```
 
+### 3. Export Results (`exported_data/`)
+After the run, three files will appear in the folder:
+* `poses.csv`: Table of relative movements (odometry).
+* `tracking.json`: Movement history for each berry (ID + BBoxes).
+* `inliers.json`: Pairs of 2D points for each frame (Landmarks).
+
 ---
 
-## Usage (Tracker API)
+## Data Re-import
 
-Example of integrating the `StrawberryTracker` into your pipeline with Dual-Pipeline support:
+Example of how to load exported data back for analysis or passing to GTSAM:
 
 ```python
-import yaml
-import torch
+import pandas as pd
+import json
 import numpy as np
-from ultralytics import YOLO
-from strawberry_tracker import StrawberryTracker
 
-# 1. Load configuration
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
+# Load odometry (CSV)
+df = pd.read_csv('exported_data/poses.csv')
+for _, row in df.iterrows():
+    # Extract translation vector
+    translation = np.array([row['tx'], row['ty'], row['tz']])
+    # Extract rotation matrix
+    rotation = row[['r11','r12','r13','r21','r22','r23','r31','r32','r33']].values.reshape(3,3)
 
-# 2. Initialize models
-yolo = YOLO(config['yolo_weights_path'])
-tracker = StrawberryTracker(yolo, device='cuda', config=config)
-
-# 3. Camera Intrinsics (1920x1080, Isaac Sim)
-K = np.array([
-    [1649.25, 0, 960.0],
-    [0, 1649.27, 540.0],
-    [0, 0, 1]
-], dtype=np.float32)
-
-# 4. Process frame (Input must be in RGB format!)
-img_rgb = ... # Load frame
-R, t, ids, boxes, matches1, matches2, inliers1, inliers2, debug = tracker.forward(img_rgb, K)
+# Load tracking (JSON)
+with open('exported_data/tracking.json', 'r') as f:
+    data = json.load(f)
+    # Get boxes for frame 065
+    frame_boxes = data['frame_065']
+    for obj in frame_boxes:
+        print(f"ID: {obj['id']}, BBox: {obj['bbox']}")
 ```
 
-**`forward` Output Format:**
-- `R`, `t`: Relative camera rotation and translation.
-- `ids`: Array of global berry IDs (e.g., `[0, 4, 12]`).
-- `boxes`: Bounding boxes `[x1, y1, x2, y2]`.
-- `matches1`, `matches2`: All found keypoint matches (raw data).
-- `inliers1`, `inliers2`: Scene point coordinates that passed MAGSAC filtering (ideal for odometry visualization).
-
 ---
 
-## Data Export (GTSAM Integration)
+## Environment Requirements
+The project is managed via `uv`. Main dependencies: `torch`, `torchvision`, `kornia`, `ultralytics`, `opencv-python`, `pyyaml`.
 
-The `config.yaml` file includes an `export_data: true` mode. When enabled, the `test_on_coco.py` script automatically aggregates all scene information and saves it to the `exported_data/` directory:
-
-1. **`poses.csv`**: Rotation matrices ($R$) and translation vectors ($t$) line-by-line (frame, r11-r33, tx, ty, tz).
-2. **`tracking.json`**: Berry IDs and their box coordinates (for MOTA/IDF1 metrics and point factors in GTSAM).
-3. **`inliers.json`**: Precise coordinates of point pairs that passed RANSAC (ready-to-use landmarks for Loop Closures).
-
-### Example Data Loading and Analysis (Python / Pandas)
-
-```python
-import json
-import pandas as pd
-import numpy as np
-
-# 1. Loading camera trajectory (Odometry)
-poses_df = pd.read_csv('exported_data/poses.csv')
-print("First 5 frames of odometry:")
-print(poses_df.head())
-
-# Reconstruction of the Rotation Matrix R (3x3) for frame 0
-row = poses_df.iloc[0]
-R = np.array([
-    [row['r11'], row['r12'], row['r13']],
-    [row['r21'], row['r22'], row['r23']],
-    [row['r31'], row['r32'], row['r33']]
-])
-
-# 2. Loading berry tracking
-with open('exported_data/tracking.json', 'r') as f:
-    tracking = json.load(f)
-
-# Practical example: collecting the trajectory of a single berry (ID 0)
-berry_0_trajectory = []
-for frame_name, detections in tracking.items():
-    for det in detections:
-        if det['id'] == 0:
-            # Bounding Box center calculation
-            bbox = det['bbox']
-            center_x = (bbox[0] + bbox[2]) / 2
-            center_y = (bbox[1] + bbox[3]) / 2
-            berry_0_trajectory.append((frame_name, center_x, center_y))
-            
-print(f"\nBerry ID 0 successfully tracked in {len(berry_0_trajectory)} frames.")
+```bash
+uv sync
 ```
